@@ -1782,17 +1782,21 @@ Html5QrcodeSupportedFormats.ITF,
 ] : undefined,
 verbose: false
 });
+console.log('[Scanner] Html5Qrcode chargé, formats forcés :', typeof Html5QrcodeSupportedFormats !== 'undefined');
 _scannerInstance.start(
 { facingMode: 'environment' },
-{ fps: 12, qrbox: (w,h) => { const size = Math.floor(Math.min(w,h)*0.75); return { width: Math.max(size, 280), height: Math.max(Math.floor(size*0.55), 160) }; }, aspectRatio: 1.777, disableFlip: false },
-(decodedText) => { onScanSuccess(decodedText); },
-() => {}
+{ fps: 10 },
+(decodedText, decodedResult) => { console.log('[Scanner] Code détecté :', decodedText, decodedResult); onScanSuccess(decodedText); },
+(errorMessage) => { /* frame sans code détecté — normal, pas d'action */ }
 ).then(() => {
+console.log('[Scanner] Caméra démarrée avec succès.');
 document.getElementById('scanner-status').textContent = 'Pointez la caméra vers le code-barres ou QR code';
-}).catch(() => {
+}).catch((err) => {
+console.error('[Scanner] Échec démarrage caméra :', err);
 document.getElementById('scanner-status').innerHTML = '⚠ Caméra inaccessible (permission refusée ou indisponible). Utilisez la saisie manuelle ci-dessous.';
 });
 } catch(e) {
+console.error('[Scanner] Erreur d\'initialisation :', e);
 document.getElementById('scanner-status').innerHTML = '⚠ Erreur d\'initialisation de la caméra. Utilisez la saisie manuelle ci-dessous.';
 }
 }
