@@ -3731,8 +3731,24 @@ enableIndexedDbPersistence(db).catch(err => {
 // Firestore dédiées), jamais aux données de l'établissement.
 window._pendingPairId = new URLSearchParams(location.search).get('pair');
 if (window._pendingPairId) {
+  // On masque tout de suite l'écran de connexion normal pour éviter qu'il ne s'affiche
+  // même brièvement pendant que la connexion anonyme se met en place.
+  const authScreenEl = document.getElementById('auth-screen');
+  const appRootEl = document.getElementById('app-root');
+  if (appRootEl) appRootEl.style.display = 'none';
+  if (authScreenEl) {
+    authScreenEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;width:100%;color:#9e9b96;font-family:sans-serif;text-align:center;padding:20px">Connexion à la session de scan...</div>';
+  }
   signInAnonymously(auth).catch(err => {
     console.error('Échec de connexion anonyme pour le pairage:', err);
+    if (authScreenEl) {
+      const isDisabled = err && (err.code === 'auth/operation-not-allowed' || err.code === 'auth/admin-restricted-operation');
+      authScreenEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;width:100%;color:#9e9b96;font-family:sans-serif;text-align:center;padding:20px;line-height:1.6">'
+        + (isDisabled
+          ? "⚠ La connexion anonyme n'est pas activée sur ce projet.<br>Demandez à l'administrateur d'activer \"Anonyme\" dans Firebase Console → Authentication → Sign-in method."
+          : '⚠ Impossible de démarrer la session de scan.<br>Redemandez un nouveau QR depuis le poste principal.')
+        + '</div>';
+    }
   });
 }
 
@@ -4419,10 +4435,12 @@ onAuthStateChanged(auth, user => {
     document.body.classList.remove('role-econome');
     if (typeof window.resetLocalState === 'function') window.resetLocalState();
     window.setSyncStatus('', '');
-    document.getElementById('auth-password').value = '';
-    document.getElementById('auth-password-confirm').value = '';
-    window.authSwitchTab('login');
-    document.getElementById('auth-error').style.display = 'none';
+    if (!window._pendingPairId) {
+      document.getElementById('auth-password').value = '';
+      document.getElementById('auth-password-confirm').value = '';
+      window.authSwitchTab('login');
+      document.getElementById('auth-error').style.display = 'none';
+    }
   }
 });
 </script>
