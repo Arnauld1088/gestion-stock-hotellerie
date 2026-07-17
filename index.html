@@ -1762,6 +1762,7 @@ let _scannerInstance = null;
 let _scannerCallback = null;
 let _scannerOptions = {};
 function openScanner(callback, options) {
+try {
 _scannerCallback = callback;
 _scannerOptions = options || {};
 const modalEl = document.getElementById('modal-scanner').querySelector('.modal');
@@ -1783,6 +1784,13 @@ if (typeof Html5Qrcode === 'undefined') {
 document.getElementById('scanner-status').innerHTML = '⚠ Librairie de scan indisponible (pas de connexion, ou bloquée). Utilisez la saisie manuelle ci-dessous.';
 return;
 }
+clearTimeout(window._scannerStartTimeout);
+window._scannerStartTimeout = setTimeout(() => {
+const statusEl = document.getElementById('scanner-status');
+if (statusEl && statusEl.textContent === 'Démarrage de la caméra...') {
+statusEl.innerHTML = '⚠ La caméra met du temps à démarrer (ou n\'a pas pu s\'ouvrir). Vous pouvez utiliser la saisie manuelle ci-dessous en attendant.';
+}
+}, 6000);
 try {
 _scannerInstance = new Html5Qrcode('scanner-camera-view', {
 formatsToSupport: (typeof Html5QrcodeSupportedFormats !== 'undefined') ? [
@@ -1814,6 +1822,17 @@ document.getElementById('scanner-status').innerHTML = '⚠ Caméra inaccessible 
 } catch(e) {
 console.error('[Scanner] Erreur d\'initialisation :', e);
 document.getElementById('scanner-status').innerHTML = '⚠ Erreur d\'initialisation de la caméra. Utilisez la saisie manuelle ci-dessous.';
+}
+} catch (outerErr) {
+console.error('[Scanner] Erreur générale openScanner:', outerErr);
+const modalOpen = document.getElementById('modal-scanner')?.classList.contains('open');
+if (modalOpen) {
+const el = document.getElementById('scanner-status');
+if (el) el.innerHTML = '⚠ Erreur : '+(outerErr && outerErr.message ? outerErr.message : 'erreur inconnue');
+} else {
+const el = document.getElementById('auth-screen');
+if (el) { el.style.display='flex'; el.innerHTML = '<div style="color:#9e9b96;font-family:sans-serif;text-align:center;padding:20px">⚠ Erreur au démarrage du scanner : '+(outerErr && outerErr.message ? outerErr.message : 'erreur inconnue')+'</div>'; }
+}
 }
 }
 function closeScanner() {
@@ -2021,10 +2040,18 @@ window._pairingExpiryTimer = setInterval(updateExpiry, 30000);
 }
 // ===== Écran du téléphone appairé (Option B — aucun accès aux données) =====
 function showPairedScannerUI(pairId) {
+console.log('[Pairing] showPairedScannerUI, pairId=', pairId);
+try {
 document.getElementById('auth-screen').style.display = 'none';
 pairedScannerNext(pairId);
+} catch (e) {
+console.error('[Pairing] Erreur showPairedScannerUI:', e);
+const el = document.getElementById('auth-screen');
+if (el) { el.style.display='flex'; el.innerHTML = '<div style="color:#9e9b96;font-family:sans-serif;text-align:center;padding:20px">⚠ Erreur d\'affichage du scanner : '+(e&&e.message?e.message:'')+'</div>'; }
+}
 }
 function pairedScannerNext(pairId) {
+try {
 openScanner(function(code) {
 scannerModeLog(String(code), true);
 if (typeof window.depositPairingScan === 'function') {
@@ -2032,6 +2059,38 @@ window.depositPairingScan(pairId, code).then(ok => { if (!ok) scannerModeLog('É
 }
 setTimeout(()=>pairedScannerNext(pairId), 700);
 }, { mode: 'code_only', standalone: true });
+} catch (e) {
+console.error('[Pairing] Erreur openScanner:', e);
+const modalOpen = document.getElementById('modal-scanner')?.classList.contains('open');
+if (modalOpen) {
+const el = document.getElementById('scanner-status');
+if (el) el.innerHTML = '⚠ Erreur : '+(e&&e.message?e.message:'erreur inconnue');
+} else {
+const el = document.getElementById('auth-screen');
+if (el) { el.style.display='flex'; el.innerHTML = '<div style="color:#9e9b96;font-family:sans-serif;text-align:center;padding:20px">⚠ Erreur au démarrage du scanner : '+(e&&e.message?e.message:'erreur inconnue')+'</div>'; }
+}
+}
+}
+// ===== SAUVEGARDE SERVEUR AUTOMATIQUE (visible et restaurable par l'admin plateforme) =====
+function checkAndWriteServerBackup() {
+if (!window._etablissementId) return;
+const lastDate = localStorage.getItem('gestion_stock_server_backup_date');
+if (lastDate === today()) return;
+const snapshot = {
+articles: state.articles, purchases: state.purchases, sorties: state.sorties,
+fournisseurs: state.fournisseurs, recettes: state.recettes, ventes: state.ventes,
+commandes: state.commandes, activityLog: state.activityLog,
+categoriesArticles: state.categoriesArticles, categoriesOffert: state.categoriesOffert,
+notificationEmails: state.notificationEmails, lastAlertEmailDate: state.lastAlertEmailDate,
+foodCost: state.foodCost, appName: state.appName, appSub: state.appSub,
+lightMode: state.lightMode, ROWS_PER_PAGE: state.ROWS_PER_PAGE, members: state.members,
+savedAt: new Date().toISOString()
+};
+if (typeof window.writeServerBackup === 'function') {
+window.writeServerBackup(window._etablissementId, snapshot).then(ok => {
+if (ok) localStorage.setItem('gestion_stock_server_backup_date', today());
+});
+}
 }
 // ===== NOTIFICATIONS PAR EMAIL =====
 function checkAndSendStockAlertEmail() {
@@ -2086,6 +2145,53 @@ function removeNotificationEmail(email) {
 state.notificationEmails = (state.notificationEmails||[]).filter(e => e!==email);
 saveState(); renderNotificationEmailsList();
 showToast('🗑 Adresse retirée');
+}
+// ===== ACTIONS ADMIN PLATEFORME (Vue Admin) =====
+function adminToggleAccount(uid, etablissementId, role, newState) {
+if (!confirm((newState?'Désactiver':'Réactiver')+' ce compte ?'+(newState?' Il ne pourra plus se connecter tant qu\'il ne sera pas réactivé.':''))) return;
+if (typeof window.setAccountDisabled !== 'function') return;
+window.setAccountDisabled(uid, etablissementId, role, newState).then(ok => {
+if (ok) {
+showToast('✓ Compte '+(newState?'désactivé':'réactivé'));
+const d = window._adminData && window._adminData[etablissementId];
+if (d && d.members) { const m = d.members.find(x=>x.uid===uid); if (m) m.disabled = newState; }
+showAdminDetail(etablissementId);
+}
+});
+}
+function adminSaveRename(etablissementId) {
+const nameEl = document.getElementById('admin-rename-name');
+const subEl = document.getElementById('admin-rename-sub');
+const name = (nameEl?.value||'').trim() || 'STOCK';
+const sub = (subEl?.value||'').trim() || 'Gestion de Stock';
+if (typeof window.adminRenameEtablissement !== 'function') return;
+window.adminRenameEtablissement(etablissementId, name, sub).then(ok => {
+if (ok) {
+const d = window._adminData && window._adminData[etablissementId];
+if (d) { d.appName = name; d.appSub = sub; }
+if (typeof window.loadAdminUsers === 'function') window.loadAdminUsers();
+showAdminDetail(etablissementId);
+}
+});
+}
+function adminConfirmDelete(etablissementId, label) {
+const typed = prompt('Cette action est IRRÉVERSIBLE et supprime toutes les données de "'+label+'" ainsi que tous ses comptes liés (admin, économe, scanner).\n\nTapez SUPPRIMER en majuscules pour confirmer :');
+if (typed === null) return;
+if (typed !== 'SUPPRIMER') { showToast('⚠ Suppression annulée (texte incorrect)','var(--orange)'); return; }
+if (typeof window.adminDeleteEtablissement !== 'function') return;
+window.adminDeleteEtablissement(etablissementId).then(ok => {
+if (ok) { closeModal('modal-admin-detail'); if (typeof window.loadAdminUsers === 'function') window.loadAdminUsers(); }
+});
+}
+function adminRestoreBackup(etablissementId, backupId) {
+const backups = (window._adminBackupsCache && window._adminBackupsCache[etablissementId]) || [];
+const b = backups.find(x=>x.id===backupId);
+if (!b) return;
+if (!confirm('Restaurer la sauvegarde du '+new Date(b.savedAt).toLocaleString('fr-FR')+' ?\nCela remplace TOUTES les données actuelles de cet établissement (le poste du client verra ces données à sa prochaine connexion).')) return;
+if (typeof window.restoreServerBackup !== 'function') return;
+window.restoreServerBackup(etablissementId, b.data).then(ok => {
+showToast(ok ? '✓ Sauvegarde restaurée' : '⚠ Échec de la restauration', ok?'var(--green)':'var(--red)');
+});
 }
 function renderFournisseurs() {
 const q = document.getElementById('search-fournisseurs').value.toLowerCase();
@@ -3773,7 +3879,7 @@ function updateMargePreview() { const pa = parseFloat(document.getElementById('a
 <script type="module">
 import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, deleteDoc, collection, getDocs, enableIndexedDbPersistence, serverTimestamp, onSnapshot } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+import { getFirestore, doc, getDoc, setDoc, deleteDoc, collection, getDocs, enableIndexedDbPersistence, serverTimestamp, onSnapshot, query, where, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBHRPA87TEbD5kFvwDRsS7-7Vh8hzbI6Fo",
@@ -3936,12 +4042,14 @@ window.isScanner = function() {
 async function resolveAccountContext(user) {
   window._etablissementId = user.uid;
   window._role = 'admin';
+  window._accountDisabled = false;
   try {
     const linkSnap = await getDoc(doc(db, 'accountLinks', user.uid));
     if (linkSnap.exists()) {
       const link = linkSnap.data();
       window._etablissementId = link.etablissementId || user.uid;
       window._role = link.role || 'admin';
+      window._accountDisabled = link.disabled === true;
     }
   } catch (e) {
     console.warn('Impossible de résoudre le lien de compte, mode admin par défaut :', e);
@@ -4143,19 +4251,40 @@ window.stopPairing = function() {
 // Téléphone appairé : vérifie la session puis affiche l'écran caméra (aucun accès aux données).
 window.enterPairedScannerMode = async function() {
   const pairId = window._pendingPairId;
-  const msg = (text) => { document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#999;font-family:sans-serif;text-align:center;padding:20px;background:#0c0c0e">'+text+'</div>'; };
+  const authScreenEl = document.getElementById('auth-screen');
+  const msg = (text) => {
+    if (authScreenEl) {
+      authScreenEl.style.display = 'flex';
+      authScreenEl.style.alignItems = 'center';
+      authScreenEl.style.justifyContent = 'center';
+      authScreenEl.innerHTML = '<div style="color:#9e9b96;font-family:sans-serif;text-align:center;padding:20px;line-height:1.6;max-width:90vw">'+text+'</div>';
+    }
+  };
+  console.log('[Pairing] enterPairedScannerMode, pairId=', pairId);
   if (!pairId) { msg('Lien de connexion invalide.'); return; }
+  msg('Vérification de la session de scan...');
   try {
     const snap = await getDoc(doc(db, 'pairings', pairId));
+    console.log('[Pairing] pairing doc exists:', snap.exists(), snap.exists() ? snap.data() : null);
     if (!snap.exists() || !snap.data().expiresAt || snap.data().expiresAt < Date.now()) {
-      msg('Ce QR de connexion a expiré.<br>Redemandez-en un nouveau depuis le poste principal.');
+      msg('⚠ Ce QR de connexion a expiré.<br>Redemandez-en un nouveau depuis le poste principal.');
       return;
     }
   } catch (e) {
-    msg('Impossible de vérifier la session de pairage.');
+    console.error('[Pairing] Erreur vérification pairing:', e);
+    msg('⚠ Impossible de vérifier la session de pairage.<br><span style="font-size:11px;opacity:0.7">'+(e && e.message ? e.message : '')+'</span>');
     return;
   }
-  if (typeof window.showPairedScannerUI === 'function') window.showPairedScannerUI(pairId);
+  try {
+    if (typeof window.showPairedScannerUI === 'function') {
+      window.showPairedScannerUI(pairId);
+    } else {
+      msg('⚠ Erreur interne : interface de scan indisponible.');
+    }
+  } catch (e) {
+    console.error('[Pairing] Erreur affichage scanner:', e);
+    msg('⚠ Erreur au démarrage de la caméra.<br><span style="font-size:11px;opacity:0.7">'+(e && e.message ? e.message : '')+'</span>');
+  }
 };
 window.depositPairingScan = async function(pairId, code) {
   try {
@@ -4199,6 +4328,19 @@ window.resetLocalState = resetLocalState;
 async function loadUserData(user) {
   window.setSyncStatus('pending','Chargement...');
   await resolveAccountContext(user);
+  if (window._accountDisabled) {
+    const authScreenEl = document.getElementById('auth-screen');
+    if (authScreenEl) {
+      authScreenEl.style.display = 'flex';
+      authScreenEl.style.alignItems = 'center';
+      authScreenEl.style.justifyContent = 'center';
+      authScreenEl.innerHTML = '<div style="color:#9e9b96;font-family:sans-serif;text-align:center;padding:20px;line-height:1.6;max-width:90vw">⚠ Ce compte a été désactivé.<br>Contactez votre administrateur pour plus d\'informations.</div>';
+    }
+    const appRootEl = document.getElementById('app-root');
+    if (appRootEl) appRootEl.style.display = 'none';
+    await signOut(auth);
+    return;
+  }
   if (window.pushLocalSnapshot) window.pushLocalSnapshot('avant_connexion');
   try {
     const snap = await getDoc(doc(db, 'users', window._etablissementId));
@@ -4324,6 +4466,7 @@ async function loadUserData(user) {
   document.body.classList.toggle('role-econome', window.isEconome());
   showPage('aujourdhui');
   if (typeof checkAndSendStockAlertEmail === 'function') checkAndSendStockAlertEmail();
+  if (typeof checkAndWriteServerBackup === 'function') checkAndWriteServerBackup();
 }
 
 window.onUserReady = function(user) {
@@ -4422,6 +4565,96 @@ window.removeEconomeAccount = async function(uid, email) {
 
 function adminGetStock(a) { return (a.total_entrant||0) - (a.total_sortant||0); }
 
+// ===== Actions admin plateforme (arnsog@gmail.com uniquement, vérifié côté règles Firestore) =====
+
+// Active/désactive un compte (admin d'établissement, économe ou scanner). Crée le document
+// accountLinks s'il n'existait pas encore (cas du tout premier compte admin d'un établissement,
+// qui n'en a normalement pas besoin — voir resolveAccountContext).
+window.setAccountDisabled = async function(uid, etablissementId, role, disabled) {
+  try {
+    await setDoc(doc(db, 'accountLinks', uid), { etablissementId, role, disabled }, { merge: true });
+    return true;
+  } catch (e) {
+    console.error('Erreur setAccountDisabled:', e);
+    if (typeof showToast === 'function') showToast('⚠ Erreur : '+e.message, 'var(--red)');
+    return false;
+  }
+};
+
+window.adminSendPasswordReset = async function(email) {
+  try {
+    await sendPasswordResetEmail(auth, email);
+    if (typeof showToast === 'function') showToast('✓ Email de réinitialisation envoyé à '+email);
+    return true;
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('⚠ '+authErrorMsg(e.code||''), 'var(--red)');
+    return false;
+  }
+};
+
+window.adminRenameEtablissement = async function(etablissementId, appName, appSub) {
+  try {
+    await setDoc(doc(db, 'users', etablissementId), { appName, appSub }, { merge: true });
+    if (typeof showToast === 'function') showToast('✓ Établissement renommé');
+    return true;
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('⚠ Erreur : '+e.message, 'var(--red)');
+    return false;
+  }
+};
+
+window.adminDeleteEtablissement = async function(etablissementId) {
+  try {
+    const linksSnap = await getDocs(query(collection(db, 'accountLinks'), where('etablissementId', '==', etablissementId)));
+    for (const d of linksSnap.docs) { await deleteDoc(d.ref); }
+    const backupsSnap = await getDocs(collection(db, 'users', etablissementId, 'backups'));
+    for (const d of backupsSnap.docs) { await deleteDoc(d.ref); }
+    await deleteDoc(doc(db, 'users', etablissementId));
+    if (typeof showToast === 'function') showToast('🗑 Établissement supprimé définitivement', 'var(--red)');
+    return true;
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('⚠ Erreur : '+e.message, 'var(--red)');
+    return false;
+  }
+};
+
+// Sauvegarde serveur automatique (indépendante des instantanés locaux, qui restent sur
+// l'appareil et sont invisibles pour l'admin plateforme). Rotation sur 14 créneaux — au bout
+// de 14 jours d'usage, chaque nouvelle sauvegarde écrase automatiquement celle d'il y a 14
+// jours, sans logique de purge à gérer séparément.
+window.writeServerBackup = async function(etablissementId, snapshotData) {
+  try {
+    const slot = 'slot-' + (Math.floor(Date.now()/86400000) % 14);
+    await setDoc(doc(db, 'users', etablissementId, 'backups', slot), {
+      data: JSON.stringify(snapshotData),
+      savedAt: Date.now()
+    });
+    return true;
+  } catch (e) {
+    console.error('Erreur sauvegarde serveur:', e);
+    return false;
+  }
+};
+window.listServerBackups = async function(etablissementId) {
+  try {
+    const snap = await getDocs(query(collection(db, 'users', etablissementId, 'backups'), orderBy('savedAt', 'desc')));
+    return snap.docs.map(d => ({ id: d.id, savedAt: d.data().savedAt, data: d.data().data }));
+  } catch (e) {
+    console.error('Erreur liste sauvegardes:', e);
+    return [];
+  }
+};
+window.restoreServerBackup = async function(etablissementId, backupData) {
+  try {
+    const parsed = JSON.parse(backupData);
+    await setDoc(doc(db, 'users', etablissementId), parsed, { merge: false });
+    return true;
+  } catch (e) {
+    console.error('Erreur restauration sauvegarde serveur:', e);
+    return false;
+  }
+};
+
 window.loadAdminUsers = async function() {
   const tbody = document.getElementById('admin-users-tbody');
   if (!tbody || !window.isAdmin()) return;
@@ -4480,15 +4713,38 @@ window.loadAdminUsers = async function() {
 window.showAdminDetail = function(uid) {
   const d = window._adminData && window._adminData[uid];
   if (!d) return;
+  window._adminCurrentUid = uid;
   const articles = d.articles || [];
   const mouvements = [
     ...(d.purchases||[]).map(p=>({date:p.date,type:'Entrée',article:p.article,qte:p.quantite,detail:p.fournisseur||''})),
     ...(d.sorties||[]).map(s=>({date:s.date,type:'Sortie',article:s.article,qte:s.quantite,detail:s.secteur||''}))
   ].sort((a,b)=>b.date>a.date?1:-1).slice(0,25);
   const alertes = articles.filter(a=>{const s=adminGetStock(a);return s<=0||(a.stock_min>0&&s<a.stock_min);});
+  const members = d.members || [];
+  const membersHtml = members.length ? members.map(m => {
+    const statusBadge = m.disabled ? '<span class="badge badge-red">Désactivé</span>' : '<span class="badge badge-green">Actif</span>';
+    const roleLabel = m.role==='admin'?'Admin':m.role==='scanner'?'Scanner':'Économe';
+    return '<div class="setting-row">'
+    +'<div><div class="setting-label">'+m.email+' <span style="font-size:11px;color:var(--text3)">('+roleLabel+')</span></div><div class="setting-desc">'+statusBadge+'</div></div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap">'
+    +'<button class="btn btn-outline btn-sm" onclick="window.adminSendPasswordReset(\''+m.email+'\')">✉ Reset MDP</button>'
+    +'<button class="btn '+(m.disabled?'btn-success':'btn-danger')+' btn-sm" onclick="adminToggleAccount(\''+m.uid+'\',\''+uid+'\',\''+(m.role||'admin')+'\','+(!m.disabled)+')">'+(m.disabled?'✓ Réactiver':'⛔ Désactiver')+'</button>'
+    +'</div></div>';
+  }).join('') : '<div style="color:var(--text3);font-size:12px;padding:8px 0">Aucun compte listé (établissement ancien, créé avant la gestion multi-comptes)</div>';
   document.getElementById('admin-detail-title').textContent = (d.email||uid)+' — '+(d.appName||'STOCK');
   document.getElementById('admin-detail-body').innerHTML =
-    '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:18px">'
+    '<div class="settings-section"><div class="settings-title">Établissement</div>'
+    +'<div class="form-row" style="margin-bottom:10px">'
+    +'<input type="text" id="admin-rename-name" placeholder="Nom" value="'+(d.appName||'').replace(/"/g,'&quot;')+'">'
+    +'<input type="text" id="admin-rename-sub" placeholder="Sous-titre" value="'+(d.appSub||'').replace(/"/g,'&quot;')+'">'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap">'
+    +'<button class="btn btn-outline btn-sm" onclick="adminSaveRename(\''+uid+'\')">💾 Renommer</button>'
+    +'<button class="btn btn-danger btn-sm" onclick="adminConfirmDelete(\''+uid+'\',\''+(d.appName||uid).replace(/'/g,"\\'")+'\')">🗑 Supprimer cet établissement</button>'
+    +'</div></div>'
+    +'<div class="settings-section"><div class="settings-title">Comptes ('+members.length+')</div>'+membersHtml+'</div>'
+    +'<div class="settings-section"><div class="settings-title">Sauvegardes serveur</div><div id="admin-backups-list" style="font-size:12px;color:var(--text3)">Chargement...</div></div>'
+    +'<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:18px">'
     +kpiBox('Articles', articles.length)
     +kpiBox('Fournisseurs', (d.fournisseurs||[]).length)
     +kpiBox('Recettes', (d.recettes||[]).length)
@@ -4503,6 +4759,15 @@ window.showAdminDetail = function(uid) {
     +'<thead><tr><th style="background:var(--surface2);padding:7px 10px;text-align:left;border-bottom:1px solid var(--border);position:sticky;top:0;font-size:11px;color:var(--text3)">Date</th><th style="background:var(--surface2);padding:7px 10px;text-align:left;border-bottom:1px solid var(--border);position:sticky;top:0;font-size:11px;color:var(--text3)">Type</th><th style="background:var(--surface2);padding:7px 10px;text-align:left;border-bottom:1px solid var(--border);position:sticky;top:0;font-size:11px;color:var(--text3)">Article</th><th style="background:var(--surface2);padding:7px 10px;text-align:right;border-bottom:1px solid var(--border);position:sticky;top:0;font-size:11px;color:var(--text3)">Qté</th><th style="background:var(--surface2);padding:7px 10px;text-align:left;border-bottom:1px solid var(--border);position:sticky;top:0;font-size:11px;color:var(--text3)">Détail</th></tr></thead>'
     +'<tbody>'+(mouvements.length?mouvements.map(m=>'<tr><td style="padding:5px 10px;border-bottom:1px solid rgba(46,46,52,0.3)">'+fmtDate(m.date)+'</td><td style="padding:5px 10px;border-bottom:1px solid rgba(46,46,52,0.3)"><span class="badge '+(m.type==='Entrée'?'badge-green':'badge-red')+'">'+m.type+'</span></td><td style="padding:5px 10px;border-bottom:1px solid rgba(46,46,52,0.3)">'+m.article+'</td><td style="padding:5px 10px;border-bottom:1px solid rgba(46,46,52,0.3);text-align:right">'+fmt(m.qte)+'</td><td style="padding:5px 10px;border-bottom:1px solid rgba(46,46,52,0.3);font-size:11px;color:var(--text3)">'+(m.detail||'—')+'</td></tr>').join(''):'<tr><td colspan="5" style="text-align:center;padding:12px;color:var(--text3)">Aucun mouvement</td></tr>')+'</tbody></table></div>';
   document.getElementById('modal-admin-detail').classList.add('open');
+  if (typeof window.listServerBackups === 'function') {
+    window.listServerBackups(uid).then(backups => {
+      window._adminBackupsCache = window._adminBackupsCache || {};
+      window._adminBackupsCache[uid] = backups;
+      const el = document.getElementById('admin-backups-list');
+      if (!el) return;
+      el.innerHTML = backups.length ? backups.map(b => '<div class="setting-row"><div><div class="setting-label">'+new Date(b.savedAt).toLocaleString('fr-FR')+'</div></div><button class="btn btn-outline btn-sm" onclick="adminRestoreBackup(\''+uid+'\',\''+b.id+'\')">↺ Restaurer</button></div>').join('') : '<div style="color:var(--text3);font-size:12px;padding:4px 0">Aucune sauvegarde serveur pour le moment (générée automatiquement une fois par jour à la connexion d\'un compte)</div>';
+    });
+  }
 };
 
 onAuthStateChanged(auth, user => {
@@ -4539,7 +4804,11 @@ onAuthStateChanged(auth, user => {
     document.body.classList.remove('role-econome');
     if (typeof window.resetLocalState === 'function') window.resetLocalState();
     window.setSyncStatus('', '');
-    if (!window._pendingPairId) {
+    if (window._pendingPairId) {
+      // On est en train de s'appairer (connexion anonyme en cours) : on ne montre jamais
+      // le formulaire de connexion normal, même pendant l'état transitoire "pas encore connecté".
+      authScreen.style.display = 'none';
+    } else {
       document.getElementById('auth-password').value = '';
       document.getElementById('auth-password-confirm').value = '';
       window.authSwitchTab('login');
