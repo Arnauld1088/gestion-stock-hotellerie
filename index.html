@@ -1804,17 +1804,47 @@ Html5QrcodeSupportedFormats.CODE_39,
 Html5QrcodeSupportedFormats.CODABAR,
 Html5QrcodeSupportedFormats.ITF,
 ] : undefined,
+// Sur les navigateurs qui le supportent (Chrome Android récent), utilise l'API native
+// BarcodeDetector du système : bien plus robuste que le décodeur JS pur, notamment
+// sur les codes-barres imprimés sur des surfaces courbes (bouteilles, canettes...).
+experimentalFeatures: { useBarCodeDetectorIfSupported: true },
 verbose: false
 });
 console.log('[Scanner] Html5Qrcode chargé, formats forcés :', typeof Html5QrcodeSupportedFormats !== 'undefined');
 _scannerInstance.start(
-{ facingMode: 'environment' },
-{ fps: 10 },
+{
+facingMode: 'environment',
+// Résolution plus élevée = plus de pixels sur les barres = meilleure lecture,
+// surtout quand le code est déformé par la courbure de la bouteille/canette.
+width: { min: 640, ideal: 1920, max: 1920 },
+height: { min: 480, ideal: 1080, max: 1080 }
+},
+{
+fps: 15,
+// Zone de scan rectangulaire (large et basse) plutôt qu'un carré centré :
+// un code-barres 1D est beaucoup plus large que haut, donc on évite de couper
+// les barres sur les côtés quand on rapproche/incline la caméra.
+qrbox: (viewfinderWidth, viewfinderHeight) => {
+const w = Math.floor(Math.min(viewfinderWidth, viewfinderHeight) * 0.9);
+const h = Math.floor(w * 0.45);
+return { width: w, height: Math.max(h, 120) };
+},
+aspectRatio: 1.7777778,
+disableFlip: false
+},
 (decodedText, decodedResult) => { console.log('[Scanner] Code détecté :', decodedText, decodedResult); onScanSuccess(decodedText); },
 (errorMessage) => { /* frame sans code détecté — normal, pas d'action */ }
 ).then(() => {
 console.log('[Scanner] Caméra démarrée avec succès.');
 document.getElementById('scanner-status').textContent = 'Pointez la caméra vers le code-barres ou QR code';
+// Active la mise au point continue et le zoom si le matériel le permet — aide beaucoup
+// sur les surfaces courbes où l'autofocus par défaut peut hésiter.
+try {
+const track = _scannerInstance.getRunningTrackCapabilities ? _scannerInstance.getRunningTrackCapabilities() : null;
+if (track && track.focusMode && track.focusMode.includes('continuous')) {
+_scannerInstance.applyVideoConstraints({ advanced: [{ focusMode: 'continuous' }] });
+}
+} catch(e) { /* pas critique si indisponible */ }
 }).catch((err) => {
 console.error('[Scanner] Échec démarrage caméra :', err);
 document.getElementById('scanner-status').innerHTML = '⚠ Caméra inaccessible (permission refusée ou indisponible). Utilisez la saisie manuelle ci-dessous.';
@@ -2486,6 +2516,7 @@ fields: [
 { id:'f-prix_vente', label:'Prix de vente (FCFA)', required:false, patterns:['prix.vente','prix_vente','vente','pv','tarif','pvente'] },
 { id:'f-total_entrant', label:'Quantité entrante initiale', required:false, patterns:['entrant','entrée','entr','in','reçu','initial'] },
 { id:'f-total_sortant', label:'Quantité sortante initiale', required:false, patterns:['sortant','sortie','sort','out','consommé'] },
+{ id:'f-code_barre', label:'Code-barres / QR', required:false, patterns:['code.?barre','barcode','ean','ean13','gtin','qr','code_?barre'] },
 ]
 },
 entrees: {
@@ -2695,7 +2726,7 @@ let ok=0, skipped=0, dateErr=0;
 if (UI.type === 'articles') {
 const iDesig=gi('f-designation'), iCat=gi('f-categorie'), iUnite=gi('f-unite');
 const iMin=gi('f-stock_min'), iPrixA=gi('f-prix_achat'), iPrixV=gi('f-prix_vente');
-const iEntrant=gi('f-total_entrant'), iSortant=gi('f-total_sortant');
+const iEntrant=gi('f-total_entrant'), iSortant=gi('f-total_sortant'), iCodeBarre=gi('f-code_barre');
 UI.rawRows.forEach(row => {
 const d = gv(row, iDesig);
 if (!d) { skipped++; return; }
@@ -2706,6 +2737,7 @@ prix_achat: uiParseNum(row[iPrixA]) || 0,
 prix_vente: uiParseNum(row[iPrixV]) || 0,
 total_entrant: uiParseNum(row[iEntrant]) || 0,
 total_sortant: uiParseNum(row[iSortant]) || 0,
+code_barre: gv(row, iCodeBarre),
 });
 ok++;
 });
@@ -2791,7 +2823,7 @@ UI.mappedData.forEach(r => {
 const d = r.designation.trim();
 if (!d) { skipped++; return; }
 if (state.articles.find(a => a.designation.toLowerCase()===d.toLowerCase())) { skipped++; return; }
-state.articles.push({ id: Date.now()+Math.random(), designation:d, categorie:r.categorie||'', unite:r.unite||'', stock_min:r.stock_min||0, prix_achat:r.prix_achat||0, prix_vente:r.prix_vente||0, total_entrant:r.total_entrant||0, total_sortant:r.total_sortant||0 });
+state.articles.push({ id: Date.now()+Math.random(), designation:d, categorie:r.categorie||'', unite:r.unite||'', stock_min:r.stock_min||0, prix_achat:r.prix_achat||0, prix_vente:r.prix_vente||0, code_barre:r.code_barre||'', total_entrant:r.total_entrant||0, total_sortant:r.total_sortant||0 });
 added++;
 });
 } else if (UI.type === 'entrees') {
